@@ -16,7 +16,7 @@ UK_SCHEDULE = {
     ],
     "Rotavirus": [
         {"dose": 1, "age_weeks": 8, "min_interval": 0, "max_interval": 15},
-        {"dose": 2, "age_weeks": 12, "min_interval": 4, "max_interval": 23}
+        {"dose": 2, "age_weeks": 12, "min_interval": 4, "max_interval": 24}
     ],
     "MenB": [
         {"dose": 1, "age_weeks": 8, "min_interval": 0, "max_interval": 12},
@@ -31,7 +31,7 @@ UK_SCHEDULE = {
         {"dose": 2, "age_weeks": 156, "min_interval": 104, "max_interval": 208}
     ],
     "DTaP/IPV (4-in-1 pre-school booster)": [
-        {"dose": 1, "age_weeks": 156, "min_interval": 0, "max_interval": 208}
+        {"dose": 1, "age_weeks": 156, "min_interval": 52, "max_interval": 208}
     ],
     "Td/IPV (Teenage booster)": [
         {"dose": 1, "age_weeks": 702, "min_interval": 0, "max_interval": 780}  # 13-14 years
@@ -84,6 +84,7 @@ def calculate_years_months(from_date, to_date):
 def check_vaccinations(dob, vaccinations):
     today = date.today()
     results = []
+    overdue_doses = {}
 
     for vaccine, schedule in UK_SCHEDULE.items():
         given_dates = vaccinations.get(vaccine, [])
@@ -95,6 +96,15 @@ def check_vaccinations(dob, vaccinations):
                     given_age_weeks = (given_date - dob).days // 7
                     status = "correct"
                     messages = []
+
+                    # Special handling for Rotavirus
+                    if vaccine == "Rotavirus":
+                        if dose['dose'] == 1 and given_age_weeks >= 15:
+                            status = "late"
+                            messages.append(f"First dose given at {given_age_weeks} weeks. Should be given before 15 weeks.")
+                        elif dose['dose'] == 2 and given_age_weeks >= 24:
+                            status = "late"
+                            messages.append(f"Second dose given at {given_age_weeks} weeks. Should be given before 24 weeks.")
 
                     # Check if vaccine was given at the right time
                     if given_age_weeks < dose['age_weeks']:
@@ -119,6 +129,15 @@ def check_vaccinations(dob, vaccinations):
                             status = "early"
                             messages.append(f"Interval too short: {weeks_since_prev} weeks (min {dose['min_interval']})")
                     
+                    # Special handling for DTaP/IPV
+                    if vaccine == "DTaP/IPV (4-in-1 pre-school booster)":
+                        dtap_ipv_hib_hepb_doses = vaccinations.get("DTaP/IPV/Hib/HepB (6-in-1)", [])
+                        if len(dtap_ipv_hib_hepb_doses) >= 3 and dtap_ipv_hib_hepb_doses[2]:
+                            weeks_since_last_dtap = (given_date - dtap_ipv_hib_hepb_doses[2]).days // 7
+                            if weeks_since_last_dtap < 52:
+                                status = "early"
+                                messages.append(f"Given only {weeks_since_last_dtap} weeks after the third dose of DTaP/IPV/Hib/HepB. Should be at least 1 year.")
+
                     message = f"Dose {dose['dose']} given at {given_age_weeks} weeks. "
                     if messages:
                         message += " ".join(messages)
@@ -136,15 +155,13 @@ def check_vaccinations(dob, vaccinations):
                 else:
                     if (dob + timedelta(weeks=dose['age_weeks'])) <= today:
                         years, months = calculate_years_months(dob + timedelta(weeks=dose['age_weeks']), today)
-                        if years > 0:
-                            message = f"Dose {dose['dose']} is overdue by {years} year{'s' if years != 1 else ''} and {months} month{'s' if months != 1 else ''}. Should be given immediately."
-                        else:
-                            message = f"Dose {dose['dose']} is overdue by {months} month{'s' if months != 1 else ''}. Should be given immediately."
-                        results.append({
-                            "vaccine": vaccine,
+                        if vaccine not in overdue_doses:
+                            overdue_doses[vaccine] = []
+                        overdue_doses[vaccine].append({
                             "dose": dose['dose'],
-                            "status": "overdue",
-                            "message": message
+                            "years": years,
+                            "months": months,
+                            "min_interval": dose['min_interval']
                         })
                     else:
                         results.append({
@@ -156,15 +173,13 @@ def check_vaccinations(dob, vaccinations):
             else:
                 if (dob + timedelta(weeks=dose['age_weeks'])) <= today:
                     years, months = calculate_years_months(dob + timedelta(weeks=dose['age_weeks']), today)
-                    if years > 0:
-                        message = f"Dose {dose['dose']} is overdue by {years} year{'s' if years != 1 else ''} and {months} month{'s' if months != 1 else ''}. Should be given immediately."
-                    else:
-                        message = f"Dose {dose['dose']} is overdue by {months} month{'s' if months != 1 else ''}. Should be given immediately."
-                    results.append({
-                        "vaccine": vaccine,
+                    if vaccine not in overdue_doses:
+                        overdue_doses[vaccine] = []
+                    overdue_doses[vaccine].append({
                         "dose": dose['dose'],
-                        "status": "overdue",
-                        "message": message
+                        "years": years,
+                        "months": months,
+                        "min_interval": dose['min_interval']
                     })
                 else:
                     results.append({
@@ -173,6 +188,21 @@ def check_vaccinations(dob, vaccinations):
                         "status": "due",
                         "message": f"Dose {dose['dose']} is due at {dose['age_weeks']} weeks old"
                     })
+
+    # Process overdue doses
+    for vaccine, doses in overdue_doses.items():
+        for i, dose in enumerate(doses):
+            if i == 0:
+                message = f"Dose {dose['dose']} is overdue by {dose['years']} year{'s' if dose['years'] != 1 else ''} and {dose['months']} month{'s' if dose['months'] != 1 else ''}. Should be given immediately."
+            else:
+                message = f"Dose {dose['dose']} is overdue. Should be given {dose['min_interval']} weeks after the previous dose."
+            
+            results.append({
+                "vaccine": vaccine,
+                "dose": dose['dose'],
+                "status": "overdue",
+                "message": message
+            })
 
     return results
 
